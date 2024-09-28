@@ -7,16 +7,25 @@ use std::type_name::{Self, TypeName};
 use sui::{
     coin::Coin,
     event::emit,
+    clock::Clock,
     table::{Self, Table},
     balance::{Self, Balance},
 }; 
 
 use dsl_distributor::acl::AuthWitness;
 
+// === Constants === 
+
+// @dev Sentinel value for the start time of the distribution
+const MAX_U64: u64 = 18446744073709551615;
+
 // === Errors ===  
 
 #[error]
 const EInvalidClaim: vector<u8> = b"You do not have an allowance to claim";
+
+#[error]
+const EInvalidTime: vector<u8> = b"You cannot claim before the distribution has started";
 
 // === Structs ===  
 
@@ -24,6 +33,7 @@ public struct DslDistributor<phantom CoinType> has key {
     id: UID,
     allowances: Table<address, u64>,
     balance: Balance<CoinType>,
+    start: u64
 }
 
 // === Events === 
@@ -41,6 +51,7 @@ public fun new<CoinType>(ctx: &mut TxContext): DslDistributor<CoinType> {
         id: object::new(ctx),
         allowances: table::new(ctx),
         balance: balance::zero(),
+        start: MAX_U64
     }  
 }
 
@@ -53,7 +64,9 @@ public fun add<CoinType>(self: &mut DslDistributor<CoinType>, asset: Coin<CoinTy
     self.balance.join(asset.into_balance())
 }
 
-public fun claim<CoinType>(self: &mut DslDistributor<CoinType>, ctx: &mut TxContext): Coin<CoinType> {
+public fun claim<CoinType>(self: &mut DslDistributor<CoinType>, clock: &Clock, ctx: &mut TxContext): Coin<CoinType> {
+    assert!(clock.timestamp_ms() >= self.start, EInvalidTime);
+    
     let total_value = self.balance.value(); 
 
     let sender = ctx.sender(); 
@@ -98,6 +111,14 @@ public fun set_allowance<CoinType>(
 
     let allowance = &mut self.allowances[sharer];
     *allowance = new_allowance;
+}
+
+public fun set_start<CoinType>(
+    self: &mut DslDistributor<CoinType>, 
+    _: &AuthWitness, 
+    start: u64
+) {
+    self.start = start;
 }
 
 public fun remove<CoinType>(
