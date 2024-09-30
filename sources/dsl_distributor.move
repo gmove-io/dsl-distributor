@@ -4,13 +4,14 @@ module dsl_distributor::distributor;
 
 use std::u64;
 use sui::{
-    coin::{TreasuryCap, Coin},
+    coin::Coin,
     event::emit,
     clock::Clock,
+    balance::{Self, Balance},
 }; 
 use dsl_distributor::{
     acl::AuthWitness,
-    win::{Self, WIN}
+    win::{Self, WIN} // TODO: import from DSL contract
 };
 
 // === Errors ===  
@@ -23,9 +24,9 @@ const EDistributorEmpty: vector<u8> = b"The distributor has no more tokens to cl
 
 // === Structs ===  
 
-public struct DslDistributor has key {
+public struct DslDistributor<phantom WIN> has key {
     id: UID,
-    total: u64,
+    balance: Balance<WIN>,
     start: u64
 }
 
@@ -44,35 +45,37 @@ public struct Claimed has drop, store, copy {
 // === Public Mutative Functions === 
 
 fun init(ctx: &mut TxContext) {
-    transfer::share_object(DslDistributor {
+    transfer::share_object(DslDistributor<WIN> {
         id: object::new(ctx),
-        total: 0,
+        balance: balance::zero(),
         start: u64::max_value!()
     });
 }
 
 public fun claim(
-    self: &mut DslDistributor, 
+    self: &mut DslDistributor<WIN>, 
     allocation: Allocation,
-    treasury_cap: &mut TreasuryCap<WIN>,
     clock: &Clock, 
     ctx: &mut TxContext
 ): Coin<WIN> {
     assert!(clock.timestamp_ms() >= self.start, EInvalidTime);
-    assert!(self.total > 0, EDistributorEmpty);
+    assert!(self.balance.value() > 0, EDistributorEmpty);
 
     let Allocation { id, amount } = allocation;
     id.delete();
 
-    let claim_value = min(self.total, amount);
-    self.total = self.total - claim_value;
+    let claim_value = min(self.balance.value(), amount);
 
     emit(Claimed {
         sharer: ctx.sender(),
         amount: claim_value,
     });
 
-    win::mint(treasury_cap, amount, ctx)
+    self.balance.split(claim_value).into_coin(ctx)
+}
+
+public fun deposit(self: &mut DslDistributor<WIN>, asset: Coin<WIN>): u64 {
+    self.balance.join(asset.into_balance())
 }
 
 // === Admin Functions === 
@@ -85,20 +88,23 @@ public fun allocate(
     Allocation { id: object::new(ctx), amount }
 }
 
+public fun remove(
+    self: &mut DslDistributor<WIN>, 
+    _: &AuthWitness, 
+    amount: u64,
+    ctx: &mut TxContext
+): Coin<WIN> {
+    let total_value = self.balance.value(); 
+
+    self.balance.split(min(total_value, amount)).into_coin(ctx)
+}
+
 public fun set_start(
-    self: &mut DslDistributor, 
+    self: &mut DslDistributor<WIN>, 
     _: &AuthWitness, 
     start: u64
 ) {
     self.start = start;
-}
-
-public fun set_total(
-    self: &mut DslDistributor, 
-    _: &AuthWitness, 
-    total: u64
-) {
-    self.total = total;
 }
 
 // === Private Functions === 
