@@ -10,8 +10,8 @@ use sui::{
     balance::{Self, Balance},
 }; 
 use dsl_distributor::{
+    win::WIN, // TODO: import from DSL contract
     acl::AuthWitness,
-    win::{Self, WIN} // TODO: import from DSL contract
 };
 
 // === Errors ===  
@@ -64,7 +64,7 @@ public fun claim(
     let Allocation { id, amount } = allocation;
     id.delete();
 
-    let claim_value = min(self.balance.value(), amount);
+    let claim_value = u64::min(self.balance.value(), amount);
 
     emit(Claimed {
         sharer: ctx.sender(),
@@ -96,7 +96,7 @@ public fun remove(
 ): Coin<WIN> {
     let total_value = self.balance.value(); 
 
-    self.balance.split(min(total_value, amount)).into_coin(ctx)
+    self.balance.split(u64::min(total_value, amount)).into_coin(ctx)
 }
 
 public fun set_start(
@@ -105,10 +105,4 @@ public fun set_start(
     start: u64
 ) {
     self.start = start;
-}
-
-// === Private Functions === 
-
-fun min(a: u64, b: u64): u64 {
-    if (a < b) a else b
 }
