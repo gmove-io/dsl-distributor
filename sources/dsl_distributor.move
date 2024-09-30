@@ -1,39 +1,38 @@
 /// Module: dsl_distributor
-module dsl_distributor::dsl_distributor; 
+module dsl_distributor::distributor; 
 // === Imports === 
 
-use std::type_name::{Self, TypeName};
-
+use std::u64;
 use sui::{
     coin::Coin,
     event::emit,
     clock::Clock,
-    table::{Self, Table},
     balance::{Self, Balance},
 }; 
-
-use dsl_distributor::acl::AuthWitness;
-
-// === Constants === 
-
-// @dev Sentinel value for the start time of the distribution
-const MAX_U64: u64 = 18446744073709551615;
+use dsl_distributor::{
+    acl::AuthWitness,
+    win::{Self, WIN} // TODO: import from DSL contract
+};
 
 // === Errors ===  
 
 #[error]
-const EInvalidClaim: vector<u8> = b"You do not have an allowance to claim";
+const EInvalidTime: vector<u8> = b"You cannot claim before the distribution has started";
 
 #[error]
-const EInvalidTime: vector<u8> = b"You cannot claim before the distribution has started";
+const EDistributorEmpty: vector<u8> = b"The distributor has no more tokens to claim";
 
 // === Structs ===  
 
-public struct DslDistributor<phantom CoinType> has key {
+public struct DslDistributor<phantom WIN> has key {
     id: UID,
-    allowances: Table<address, u64>,
-    balance: Balance<CoinType>,
+    balance: Balance<WIN>,
     start: u64
+}
+
+public struct Allocation has key {
+    id: UID,
+    amount: u64
 }
 
 // === Events === 
@@ -41,103 +40,74 @@ public struct DslDistributor<phantom CoinType> has key {
 public struct Claimed has drop, store, copy {
     sharer: address,
     amount: u64,
-    coin: TypeName,
 }
 
 // === Public Mutative Functions === 
 
-public fun new<CoinType>(ctx: &mut TxContext): DslDistributor<CoinType> {
-    DslDistributor {
+fun init(ctx: &mut TxContext) {
+    transfer::share_object(DslDistributor<WIN> {
         id: object::new(ctx),
-        allowances: table::new(ctx),
         balance: balance::zero(),
-        start: MAX_U64
-    }  
+        start: u64::max_value!()
+    });
 }
 
-#[allow(lint(share_owned))]
-public fun share<CoinType>(self: DslDistributor<CoinType>) {
-    transfer::share_object(self);
-}
-
-public fun add<CoinType>(self: &mut DslDistributor<CoinType>, asset: Coin<CoinType>): u64 {
-    self.balance.join(asset.into_balance())
-}
-
-public fun claim<CoinType>(self: &mut DslDistributor<CoinType>, clock: &Clock, ctx: &mut TxContext): Coin<CoinType> {
+public fun claim(
+    self: &mut DslDistributor<WIN>, 
+    allocation: Allocation,
+    clock: &Clock, 
+    ctx: &mut TxContext
+): Coin<WIN> {
     assert!(clock.timestamp_ms() >= self.start, EInvalidTime);
-    
-    let total_value = self.balance.value(); 
+    assert!(self.balance.value() > 0, EDistributorEmpty);
 
-    let sender = ctx.sender(); 
+    let Allocation { id, amount } = allocation;
+    id.delete();
 
-    let allowance = &mut self.allowances[sender]; 
-
-    assert!(*allowance != 0, EInvalidClaim);
-
-    let claim_value = min(total_value, *allowance);
-
-    let asset = self.balance.split(claim_value);
+    let claim_value = min(self.balance.value(), amount);
 
     emit(Claimed {
-        sharer: sender,
+        sharer: ctx.sender(),
         amount: claim_value,
-        coin: type_name::get<CoinType>()
     });
 
-    *allowance = 0; 
-
-    asset.into_coin(ctx)
+    self.balance.split(claim_value).into_coin(ctx)
 }
 
-// === View Functions === 
-
-public fun allowance<CoinType>(self: &DslDistributor<CoinType>, sharer: address): u64 {
-    if (!self.allowances.contains(sharer)) 
-        return 0;
-
-    self.allowances[sharer]
+public fun deposit(self: &mut DslDistributor<WIN>, asset: Coin<WIN>): u64 {
+    self.balance.join(asset.into_balance())
 }
 
 // === Admin Functions === 
 
-public fun set_allowance<CoinType>(
-    self: &mut DslDistributor<CoinType>, 
+public fun allocate(
     _: &AuthWitness, 
-    sharer: address, 
-    new_allowance: u64
-) {
-    register(&mut self.allowances, sharer); 
-
-    let allowance = &mut self.allowances[sharer];
-    *allowance = new_allowance;
+    amount: u64,
+    ctx: &mut TxContext
+): Allocation {
+    Allocation { id: object::new(ctx), amount }
 }
 
-public fun set_start<CoinType>(
-    self: &mut DslDistributor<CoinType>, 
+public fun remove(
+    self: &mut DslDistributor<WIN>, 
+    _: &AuthWitness, 
+    amount: u64,
+    ctx: &mut TxContext
+): Coin<WIN> {
+    let total_value = self.balance.value(); 
+
+    self.balance.split(min(total_value, amount)).into_coin(ctx)
+}
+
+public fun set_start(
+    self: &mut DslDistributor<WIN>, 
     _: &AuthWitness, 
     start: u64
 ) {
     self.start = start;
 }
 
-public fun remove<CoinType>(
-    self: &mut DslDistributor<CoinType>, 
-    _: &AuthWitness, 
-    amount: u64,
-    ctx: &mut TxContext
-): Coin<CoinType> {
-    let total_value = self.balance.value(); 
-
-    self.balance.split(min(total_value, amount)).into_coin(ctx)
-}
-
 // === Private Functions === 
-
-fun register(allowances: &mut Table<address, u64>, sharer: address) {
-    if (!allowances.contains(sharer))  
-        table::add(allowances, sharer, 0);
-}
 
 fun min(a: u64, b: u64): u64 {
     if (a < b) a else b
