@@ -22,6 +22,9 @@ const EInvalidTime: vector<u8> = b"You cannot claim before the distribution has 
 #[error]
 const EDistributorEmpty: vector<u8> = b"The distributor has no more tokens to claim";
 
+#[error]
+const EDistributorNotEnoughBalance: vector<u8> = b"The distributor does not have enough balance to claim";
+
 // === Structs ===  
 
 public struct DslDistributor<phantom WIN> has key {
@@ -59,19 +62,18 @@ public fun claim(
     ctx: &mut TxContext
 ): Coin<WIN> {
     assert!(clock.timestamp_ms() >= self.start, EInvalidTime);
-    assert!(self.balance.value() > 0, EDistributorEmpty);
+    assert!(self.balance.value() != 0, EDistributorEmpty);
+    assert!(self.balance.value() >= allocation.amount, EDistributorNotEnoughBalance);
 
     let Allocation { id, amount } = allocation;
     id.delete();
 
-    let claim_value = u64::min(self.balance.value(), amount);
-
     emit(Claimed {
         sharer: ctx.sender(),
-        amount: claim_value,
+        amount,
     });
 
-    self.balance.split(claim_value).into_coin(ctx)
+    self.balance.split(amount).into_coin(ctx)
 }
 
 public fun deposit(self: &mut DslDistributor<WIN>, asset: Coin<WIN>): u64 {
