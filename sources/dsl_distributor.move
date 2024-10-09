@@ -85,9 +85,11 @@ public fun deposit(self: &mut DslDistributor<WIN>, asset: Coin<WIN>): u64 {
 public fun allocate(
     _: &AuthWitness, 
     amount: u64,
+    recipient: address,
     ctx: &mut TxContext
-): Allocation {
-    Allocation { id: object::new(ctx), amount }
+) {
+    let allocation = Allocation { id: object::new(ctx), amount };
+    transfer::transfer(allocation, recipient);
 }
 
 public fun remove(
